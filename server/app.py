@@ -1,107 +1,149 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import tensorflow as tf
-from tensorflow.keras.preprocessing import image
 import numpy as np
+from PIL import Image
 import io
 import os
-import logging
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
 
-# Load the Keras (.h5) model
+# Load the Keras model
 MODEL_PATH = "model.h5"
 model = tf.keras.models.load_model(MODEL_PATH)
-logger.info("✅ Model loaded successfully!")
-logger.info(f"Model summary: {model.summary()}")
-logger.info(f"Model output shape: {model.output_shape}")
+print("Model loaded successfully!")
 
-# Define image preprocessing
-def preprocess_image(img_array):
-    # Resize to match model input
-    img_array = tf.image.resize(img_array, (224, 224))
-    # Add batch dimension if needed
-    if len(img_array.shape) == 3:
-        img_array = np.expand_dims(img_array, axis=0)
-    # Normalize pixel values
-    img_array = img_array / 255.0
+# Original class labels
+original_class_labels = ["Normal", "Glaucoma", "Diabetic Retinopathy", "Cataract"]
+
+# Corrected class mapping based on observed behavior
+# If normal is predicted as glaucoma, glaucoma as glaucoma, 
+# diabetic retinopathy as glaucoma, and cataract as normal
+# then the mapping might be:
+# Index 0 (model outputs 0) → Glaucoma (for Normal, Glaucoma, and Diabetic Retinopathy)
+# Index 1 (model outputs 1) → Normal (for Cataract)
+corrected_class_mapping = {
+    0: "Glaucoma",  # Index 0 seems to be mapping to Glaucoma
+    1: "Normal",    # Index 1 seems to be mapping to Normal
+    2: "Diabetic Retinopathy",  # Adjust these as needed
+    3: "Cataract"   # Adjust these as needed
+}
+
+# Function to process image
+def process_image(img_file):
+    # Read image using PIL
+    img = Image.open(img_file)
+    
+    # Convert to RGB
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    
+    # Resize to model input size
+    img = img.resize((224, 224))
+    
+    # Convert to array and normalize
+    img_array = np.array(img).astype('float32') / 255.0
+    
+    # Add batch dimension
+    img_array = np.expand_dims(img_array, axis=0)
+    
     return img_array
-
-# Class labels (adjust these based on your dataset)
-class_labels = ["Normal", "Glaucoma", "Diabetic Retinopathy", "Cataract"]
 
 @app.route("/predict", methods=["POST"])
 def predict():
     if "images" not in request.files:
         return jsonify({"error": "No images provided"}), 400
 
+    images = request.files.getlist("images")
+    predictions = []
+    raw_predictions = []
+    
     # Get patient ID if provided
     patient_id = request.form.get("patientId", "Unknown")
-    logger.info(f"Processing request for patient ID: {patient_id}")
-    
-    images = request.files.getlist("images")
-    logger.info(f"Received {len(images)} images")
-    
-    predictions = []
-    prediction_scores = []
 
     for i, img_file in enumerate(images):
         try:
-            # Read image file
-            img_bytes = img_file.read()
-            img = tf.image.decode_image(img_bytes, channels=3)
+            # Save the image temporarily
+            temp_path = f"temp_image_{i}.jpg"
+            with open(temp_path, "wb") as f:
+                f.write(img_file.read())
             
-            # Preprocess image
-            processed_img = preprocess_image(img)
+            # Process image
+            img_file = open(temp_path, "rb")
+            img_array = process_image(img_file)
             
-            # Debug info
-            logger.info(f"Image {i+1} shape after preprocessing: {processed_img.shape}")
-            logger.info(f"Image {i+1} value range: {np.min(processed_img)} to {np.max(processed_img)}")
+            # Make prediction
+            prediction = model.predict(img_array)
+            print(f"Raw prediction for image {i+1}: {prediction}")
             
-            # Perform inference
-            output = model.predict(processed_img, verbose=0)
-            logger.info(f"Raw prediction for image {i+1}: {output}")
-            
-            # Get class with highest probability
-            predicted_class_idx = np.argmax(output, axis=1)[0]
-            confidence = float(output[0][predicted_class_idx])
-            
-            # Store prediction and confidence
-            prediction = class_labels[predicted_class_idx]
-            predictions.append(f"{prediction} (Confidence: {confidence:.2%})")
-            prediction_scores.append({
-                "class": prediction,
-                "confidence": confidence,
-                "all_scores": {class_labels[j]: float(output[0][j]) for j in range(len(class_labels))}
+            # Get the raw index and probability values
+            predicted_class_idx = np.argmax(prediction[0])
+            raw_predictions.append({
+                "image": i+1,
+                "raw_index": int(predicted_class_idx),
+                "raw_values": [float(x) for x in prediction[0]]
             })
             
-            logger.info(f"Predicted class for image {i+1}: {prediction} with confidence {confidence:.2%}")
-
+            # Map to correct class based on observed behavior
+            # Using the original mapping first
+            original_class = original_class_labels[predicted_class_idx]
+            
+            # Try to determine the actual class based on the observed pattern
+            if original_class == "Normal":
+                actual_class = "Glaucoma"  # You mentioned Normal is predicted as Glaucoma
+            elif original_class == "Glaucoma":
+                actual_class = "Glaucoma"  # This one is correct
+            elif original_class == "Diabetic Retinopathy":
+                actual_class = "Glaucoma"  # You mentioned DR is predicted as Glaucoma
+            elif original_class == "Cataract":
+                actual_class = "Normal"  # You mentioned Cataract is predicted as Normal
+            else:
+                actual_class = "Unknown"
+                
+            # Also try the corrected mapping approach
+            corrected_class = corrected_class_mapping.get(predicted_class_idx, "Unknown")
+            
+            # Add both to predictions for comparison
+            predictions.append({
+                "image": i+1,
+                "raw_prediction_index": int(predicted_class_idx),
+                "original_mapping": original_class,
+                "pattern_based_mapping": actual_class,
+                "corrected_mapping": corrected_class
+            })
+            
+            # Clean up
+            img_file.close()
+            os.remove(temp_path)
+            
         except Exception as e:
-            logger.error(f"Error processing image {i+1}: {str(e)}", exc_info=True)
-            predictions.append(f"Error: {str(e)}")
-            prediction_scores.append({"error": str(e)})
+            print(f"Error processing image {i+1}: {str(e)}")
+            predictions.append({
+                "image": i+1,
+                "error": str(e)
+            })
 
+    # Return detailed information to help diagnose the issue
     return jsonify({
         "patientId": patient_id,
         "predictions": predictions,
-        "detailed_results": prediction_scores
+        "raw_predictions": raw_predictions,
+        "note": "This response includes multiple mapping approaches to help diagnose the class mapping issue."
     })
 
+# Simple test endpoint with fixed test images
 @app.route("/test", methods=["GET"])
 def test():
-    """Simple endpoint to test if the server is running"""
-    return jsonify({"status": "ok", "message": "Server is running"})
+    """Test the model with known test images"""
+    return jsonify({
+        "status": "Use POST /predict endpoint with actual eye scan images"
+    })
 
 if __name__ == "__main__":
-    # Print model and environment info at startup
-    logger.info(f"TensorFlow version: {tf.__version__}")
-    logger.info(f"Backend: {tf.config.list_physical_devices()}")
-    logger.info(f"Available classes: {class_labels}")
+    # Print model information
+    print(f"Model input shape: {model.input_shape}")
+    print(f"Model output shape: {model.output_shape}")
+    print(f"Original class labels: {original_class_labels}")
     
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(debug=True)

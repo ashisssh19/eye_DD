@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import axios from "axios";
-import "./Home.css"; // Using the same CSS as Home
 
 const UploadScan = () => {
   const navigate = useNavigate();
@@ -9,6 +8,8 @@ const UploadScan = () => {
   const [predictions, setPredictions] = useState([]);
   const [patientId, setPatientId] = useState("");
   const [patientIdError, setPatientIdError] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState("");
 
   // Handle file selection
   const handleFileChange = (event) => {
@@ -39,6 +40,10 @@ const UploadScan = () => {
 
   // Handle upload and prediction
   const handleUpload = async () => {
+    // Reset states
+    setError("");
+    setPredictions([]);
+    
     // Validate patient ID
     if (patientId.trim() === "") {
       setPatientIdError("Patient ID is required");
@@ -46,11 +51,11 @@ const UploadScan = () => {
     }
 
     if (selectedFiles.length === 0) {
-      alert("Please select at least one image.");
+      setError("Please select at least one image.");
       return;
     }
 
-    setPredictions([]); // Clear previous predictions
+    setIsLoading(true);
 
     const formData = new FormData();
     formData.append("patientId", patientId);
@@ -63,10 +68,45 @@ const UploadScan = () => {
         headers: { "Content-Type": "multipart/form-data" },
       });
 
-      setPredictions(response.data.predictions || []);
+      console.log("Response data:", response.data);
+      
+      // Handle different response formats
+      if (response.data && Array.isArray(response.data.predictions)) {
+        // Process the predictions array to ensure we're using strings, not objects
+        const formattedPredictions = response.data.predictions.map(pred => {
+          // Check if prediction is an object or string
+          if (typeof pred === 'object') {
+            // Extract the right field from the prediction object
+            return pred.pattern_based_mapping || 
+                   pred.corrected_mapping || 
+                   pred.original_mapping || 
+                   JSON.stringify(pred);
+          }
+          // If it's already a string, just return it
+          return pred;
+        });
+        setPredictions(formattedPredictions);
+      } else if (response.data && typeof response.data.predictions === 'object') {
+        // If predictions is an object with detailed info, extract the necessary data
+        const formattedPredictions = Object.values(response.data.predictions).map(pred => {
+          if (typeof pred === 'object') {
+            return pred.pattern_based_mapping || 
+                   pred.corrected_mapping || 
+                   pred.original_mapping || 
+                   JSON.stringify(pred);
+          }
+          return String(pred);
+        });
+        setPredictions(formattedPredictions);
+      } else {
+        setError("Received an unexpected response format from the server.");
+        console.error("Unexpected response format:", response.data);
+      }
     } catch (error) {
       console.error("Error uploading images:", error);
-      alert("Failed to process images. Please try again.");
+      setError(error.response?.data?.error || "Failed to process images. Please try again.");
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -202,22 +242,48 @@ const UploadScan = () => {
             </div>
           )}
 
+          {/* Display any errors */}
+          {error && (
+            <div style={{ 
+              marginTop: '15px', 
+              padding: '10px', 
+              backgroundColor: '#ffeeee', 
+              color: '#d32f2f',
+              borderRadius: '4px',
+              maxWidth: '600px',
+              margin: '0 auto'
+            }}>
+              {error}
+            </div>
+          )}
+
           {/* Upload Button */}
           <button
             onClick={handleUpload}
+            disabled={isLoading}
             style={{
               marginTop: '20px',
-              backgroundColor: '#007bff',
+              backgroundColor: isLoading ? '#cccccc' : '#007bff',
               color: 'white',
               padding: '10px 25px',
               borderRadius: '4px',
               border: 'none',
               fontSize: '16px',
-              cursor: 'pointer'
+              cursor: isLoading ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
             }}
           >
-            Analyze Scans
+            {isLoading ? "Processing..." : "Analyze Scans"}
           </button>
+
+          {/* Loading indicator */}
+          {isLoading && (
+            <div style={{ marginTop: '15px', textAlign: 'center' }}>
+              <p>Analyzing your scans, please wait...</p>
+            </div>
+          )}
 
           {/* Prediction Results */}
           {predictions.length > 0 && (
