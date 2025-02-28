@@ -29,7 +29,7 @@ function Signup() {
               placeholder="Enter Name"
               autoComplete="off"
               name="email"
-              classmate= "form-control rounded-0"
+              className= "form-control rounded-0"
               onChange={(e)=> setName(e.target.value) }
             />
           </div>
