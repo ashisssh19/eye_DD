@@ -1,149 +1,135 @@
+import os
+import numpy as np
+import tensorflow as tf
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import tensorflow as tf
-import numpy as np
 from PIL import Image
-import io
-import os
+from tensorflow.keras.preprocessing.image import img_to_array
+from tensorflow.keras.applications.vgg16 import preprocess_input
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
 
-# Load the Keras model
+# Model and configuration
 MODEL_PATH = "model.h5"
-model = tf.keras.models.load_model(MODEL_PATH)
-print("Model loaded successfully!")
+CLASS_LABELS = ["Normal", "Glaucoma", "Diabetic Retinopathy", "Cataract"]
+INPUT_SHAPE = (224, 224)
 
-# Original class labels
-original_class_labels = ["Normal", "Glaucoma", "Diabetic Retinopathy", "Cataract"]
+# Load the model once to avoid reloading on every request
+try:
+    model = tf.keras.models.load_model(MODEL_PATH)
+    logger.info("✅ Model loaded successfully!")
+except Exception as e:
+    logger.error(f"❌ Error loading model: {e}")
+    model = None
 
-# Corrected class mapping based on observed behavior
-# If normal is predicted as glaucoma, glaucoma as glaucoma, 
-# diabetic retinopathy as glaucoma, and cataract as normal
-# then the mapping might be:
-# Index 0 (model outputs 0) → Glaucoma (for Normal, Glaucoma, and Diabetic Retinopathy)
-# Index 1 (model outputs 1) → Normal (for Cataract)
-corrected_class_mapping = {
-    0: "Glaucoma",  # Index 0 seems to be mapping to Glaucoma
-    1: "Normal",    # Index 1 seems to be mapping to Normal
-    2: "Diabetic Retinopathy",  # Adjust these as needed
-    3: "Cataract"   # Adjust these as needed
-}
+def preprocess_image(image):
+    """
+    Convert the uploaded image into a format compatible with VGG16.
+    """
+    try:
+        img_resized = image.resize(INPUT_SHAPE)
+        img_array = img_to_array(img_resized)
+        img_array = np.expand_dims(img_array, axis=0)  # Add batch dimension
+        img_array = preprocess_input(img_array)  # Apply VGG16 preprocessing
 
-# Function to process image
-def process_image(img_file):
-    # Read image using PIL
-    img = Image.open(img_file)
-    
-    # Convert to RGB
-    if img.mode != "RGB":
-        img = img.convert("RGB")
-    
-    # Resize to model input size
-    img = img.resize((224, 224))
-    
-    # Convert to array and normalize
-    img_array = np.array(img).astype('float32') / 255.0
-    
-    # Add batch dimension
-    img_array = np.expand_dims(img_array, axis=0)
-    
-    return img_array
+        logger.info(f"✅ Processed image shape: {img_array.shape}")
+        return img_array
+    except Exception as e:
+        logger.error(f"❌ Image preprocessing error: {e}")
+        raise
+
+def validate_image_file(file):
+    """
+    Validate uploaded image file format.
+    """
+    allowed_extensions = {"png", "jpg", "jpeg", "bmp", "tiff"}
+    filename = file.filename.lower()
+
+    if not filename:
+        raise ValueError("Empty filename")
+
+    file_ext = filename.split(".")[-1]
+    if file_ext not in allowed_extensions:
+        raise ValueError(f"Unsupported file type. Allowed types: {', '.join(allowed_extensions)}")
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    if "images" not in request.files:
-        return jsonify({"error": "No images provided"}), 400
+    """
+    Handle image upload and predict eye diseases.
+    """
+    if model is None:
+        return jsonify({"error": "Model failed to load"}), 500
 
-    images = request.files.getlist("images")
+    patient_id = request.form.get("patient_id", "Unknown")
+    logger.info(f"📌 Prediction request for Patient ID: {patient_id}")
+
+    if "files" not in request.files:
+        logger.warning("❌ No files uploaded")
+        return jsonify({"error": "No files uploaded"}), 400
+
+    files = request.files.getlist("files")
+    if not files:
+        logger.warning("❌ Empty file list")
+        return jsonify({"error": "No files uploaded"}), 400
+
     predictions = []
-    raw_predictions = []
-    
-    # Get patient ID if provided
-    patient_id = request.form.get("patientId", "Unknown")
 
-    for i, img_file in enumerate(images):
+    for file in files:
         try:
-            # Save the image temporarily
-            temp_path = f"temp_image_{i}.jpg"
-            with open(temp_path, "wb") as f:
-                f.write(img_file.read())
-            
-            # Process image
-            img_file = open(temp_path, "rb")
-            img_array = process_image(img_file)
-            
-            # Make prediction
-            prediction = model.predict(img_array)
-            print(f"Raw prediction for image {i+1}: {prediction}")
-            
-            # Get the raw index and probability values
-            predicted_class_idx = np.argmax(prediction[0])
-            raw_predictions.append({
-                "image": i+1,
-                "raw_index": int(predicted_class_idx),
-                "raw_values": [float(x) for x in prediction[0]]
-            })
-            
-            # Map to correct class based on observed behavior
-            # Using the original mapping first
-            original_class = original_class_labels[predicted_class_idx]
-            
-            # Try to determine the actual class based on the observed pattern
-            if original_class == "Normal":
-                actual_class = "Glaucoma"  # You mentioned Normal is predicted as Glaucoma
-            elif original_class == "Glaucoma":
-                actual_class = "Glaucoma"  # This one is correct
-            elif original_class == "Diabetic Retinopathy":
-                actual_class = "Glaucoma"  # You mentioned DR is predicted as Glaucoma
-            elif original_class == "Cataract":
-                actual_class = "Normal"  # You mentioned Cataract is predicted as Normal
-            else:
-                actual_class = "Unknown"
-                
-            # Also try the corrected mapping approach
-            corrected_class = corrected_class_mapping.get(predicted_class_idx, "Unknown")
-            
-            # Add both to predictions for comparison
+            validate_image_file(file)
+            img = Image.open(file.stream).convert("RGB")
+            processed_img = preprocess_image(img)
+
+            # Make a prediction
+            prediction = model.predict(processed_img)
+            probabilities = prediction[0]
+
+            logger.info(f"📊 Raw Predictions: {probabilities}")
+
+            # Get the original prediction
+            predicted_idx = np.argmax(probabilities)
+            predicted_label = CLASS_LABELS[predicted_idx]
+
+            logger.info(f"🔹 Original Prediction: {predicted_label}")
+
+            # Swapping logic for labels
+            label_mapping = {
+                "Glaucoma": "Diabetic Retinopathy",
+                "Diabetic Retinopathy": "Glaucoma",
+                "Cataract": "Normal",
+                "Normal": "Cataract"
+            }
+            swapped_label = label_mapping.get(predicted_label, predicted_label)
+
+            logger.info(f"🔄 Swapped Prediction: {swapped_label}")
+
             predictions.append({
-                "image": i+1,
-                "raw_prediction_index": int(predicted_class_idx),
-                "original_mapping": original_class,
-                "pattern_based_mapping": actual_class,
-                "corrected_mapping": corrected_class
+                "filename": file.filename,
+                "disease": swapped_label
             })
-            
-            # Clean up
-            img_file.close()
-            os.remove(temp_path)
-            
+
         except Exception as e:
-            print(f"Error processing image {i+1}: {str(e)}")
+            logger.error(f"❌ Error processing file {file.filename}: {e}")
             predictions.append({
-                "image": i+1,
+                "filename": file.filename,
+                "disease": "Error",
                 "error": str(e)
             })
 
-    # Return detailed information to help diagnose the issue
-    return jsonify({
-        "patientId": patient_id,
-        "predictions": predictions,
-        "raw_predictions": raw_predictions,
-        "note": "This response includes multiple mapping approaches to help diagnose the class mapping issue."
-    })
+    return jsonify(predictions)
 
-# Simple test endpoint with fixed test images
-@app.route("/test", methods=["GET"])
-def test():
-    """Test the model with known test images"""
-    return jsonify({
-        "status": "Use POST /predict endpoint with actual eye scan images"
-    })
+def main():
+    """
+    Start Flask API
+    """
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
 
 if __name__ == "__main__":
-    # Print model information
-    print(f"Model input shape: {model.input_shape}")
-    print(f"Model output shape: {model.output_shape}")
-    print(f"Original class labels: {original_class_labels}")
-    
-    app.run(debug=True)
+    main()
