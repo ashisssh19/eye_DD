@@ -1,5 +1,4 @@
 const mongoose = require('mongoose');
-
 const HistorySchema = new mongoose.Schema({
     patient_id: { type: String, required: true },
     history: [
