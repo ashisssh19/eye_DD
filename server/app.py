@@ -6,8 +6,8 @@ from flask_cors import CORS
 from pymongo import MongoClient
 from PIL import Image
 from datetime import datetime
-from tensorflow.keras.preprocessing.image import img_to_array
-from tensorflow.keras.applications.vgg16 import preprocess_input
+from tensorflow.keras.preprocessing.image import img_to_array # type: ignore
+from tensorflow.keras.applications.vgg16 import preprocess_input # type: ignore
 import logging
 
 # Configure logging
