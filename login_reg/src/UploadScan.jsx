@@ -89,16 +89,17 @@ const UploadScan = () => {
       setError("Please select at least one OCT scan.");
       return;
     }
-
+  
     setIsLoading(true);
     try {
       const formData = new FormData();
+      formData.append("patient_id", patientId);  // ✅ Add patient ID
       octFiles.forEach((file) => formData.append("files", file));
-
+  
       const response = await axios.post("http://192.168.0.165:5001/predict-oct", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
-
+  
       console.log("OCT API Response:", response.data);
       setPredictions(response.data);
     } catch (error) {
@@ -107,7 +108,7 @@ const UploadScan = () => {
       setIsLoading(false);
     }
   };
-
+  
   const removeFile = (index, isOct) => {
     if (isOct) {
       setOctFiles(octFiles.filter((_, i) => i !== index));

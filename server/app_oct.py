@@ -46,7 +46,6 @@ def preprocess_image(image):
     This function ensures that the preprocessing matches what was used in training.
     """
     try:
-        # Resize the image using bicubic resampling to maintain quality
         img_resized = image.resize(INPUT_SHAPE, Image.BICUBIC)
         img_array = np.array(img_resized) / 255.0  # Normalize pixel values
         img_array = np.expand_dims(img_array, axis=0)  # Add batch dimension
@@ -79,7 +78,10 @@ def predict_oct():
     if model is None:
         return jsonify({"error": "OCT Model failed to load"}), 500
 
-    patient_id = request.form.get("patient_id", "Unknown")
+    # Fix: Extract patient_id correctly from JSON or form-data
+    data = request.json if request.is_json else request.form
+    patient_id = data.get("patient_id", "Unknown")
+
     logger.info(f"📌 OCT Prediction request for Patient ID: {patient_id}")
 
     if "files" not in request.files:
@@ -93,43 +95,45 @@ def predict_oct():
 
     for file in files:
         try:
-            # Validate file type
             validate_image_file(file)
-
-            # Load and preprocess the image
             img = Image.open(file.stream).convert("RGB")
             processed_img = preprocess_image(img)
-
-            # Make a prediction
             prediction = model.predict(processed_img)
 
-            # Handle both sigmoid and softmax cases correctly
             if prediction.shape[-1] == 1:
-                probability_dr = float(prediction[0][0])  # Single probability (DR confidence)
-                probability_normal = 1.0 - probability_dr  # Normal confidence
+                probability_dr = float(prediction[0][0])
+                probability_normal = 1.0 - probability_dr
             else:
-                probability_normal = float(prediction[0][0])  # Softmax: Normal class probability
-                probability_dr = float(prediction[0][1])  # Softmax: DR class probability
+                probability_normal = float(prediction[0][0])
+                probability_dr = float(prediction[0][1])
 
-            # Determine the final label
             predicted_label = CLASS_LABELS[0] if probability_normal > probability_dr else CLASS_LABELS[1]
 
-            # Log raw predictions for debugging
             logger.info(f"🖼️ Prediction for {file.filename}: {predicted_label} "
-                f"(Probabilities: Normal={probability_normal:.4f}, DR={probability_dr:.4f})")
+                        f"(Probabilities: DR={probability_dr:.4f}, Normal={probability_normal:.4f})")
 
+            # Debug: Check before updating MongoDB
+            logger.info(f"🔍 Preparing to update MongoDB for Patient ID: {patient_id} with OCT Scan")
 
-            # Store result in MongoDB
-            history_collection.update_one(
+            result = history_collection.update_one(
                 {"patient_id": patient_id},
-                {"$push": {"history": {
-                    "date": datetime.utcnow(),
-                    "scan_type": "OCT Scan",
-                    "diagnosis": predicted_label,
-                    "raw_prediction": prediction[0].tolist()  # Store full prediction values for debugging
-                }}},
+                {
+                    "$setOnInsert": {"patient_id": patient_id},
+                    "$push": {
+                        "history": {
+                            "date": datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT'),
+                            "scan_type": "OCT Scan",
+                            "diagnosis": predicted_label,
+                            "probability_dr": probability_dr,
+                            "probability_normal": probability_normal
+                        }
+                    }
+                },
                 upsert=True
             )
+
+            # Debug: Log MongoDB update result
+            logger.info(f"📝 MongoDB Update Result: Modified {result.modified_count}, Upserted {result.upserted_id}")
 
             predictions.append({
                 "filename": file.filename,

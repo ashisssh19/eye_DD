@@ -32,30 +32,36 @@ const PatientHistory = () => {
   const fetchPatientHistory = async () => {
     setError("");
     setPatientHistory([]);
-    
+
     if (patientId.trim() === "") {
-      setError("Patient ID is required");
-      return;
+        setError("Patient ID is required");
+        return;
     }
 
     setIsLoading(true);
     setSearchPerformed(true);
 
     try {
-      const response = await axios.get(`http://localhost:5000/patient-history/${patientId}`, {
-        withCredentials: true,
-      });
-      
-      if (response.data && response.data.history) {
-        setPatientHistory(response.data.history);
-      } else {
-        setError("No history found for this patient ID");
-      }
+        const response = await axios.get(`http://localhost:5000/patient-history/${patientId}`, {
+            withCredentials: true,
+        });
+
+        if (response.data && response.data.history) {
+            if (response.data.history.length > 0) {
+                console.log("Fetched Patient History:", response.data.history); // Debugging
+                setPatientHistory(response.data.history); // Direct assignment to avoid unnecessary re-renders
+            } else {
+                setError("No history found for this patient ID");
+            }
+        } else {
+            setError("Unexpected response format from server");
+            console.error("Unexpected Response:", response.data);
+        }
     } catch (error) {
-      console.error("Error fetching patient history:", error);
-      setError(error.response?.data?.error || "Failed to fetch patient history. Please try again.");
+        console.error("Error fetching patient history:", error);
+        setError(error.response?.data?.error || "Failed to fetch patient history. Please try again.");
     } finally {
-      setIsLoading(false);
+        setIsLoading(false);
     }
   };
 
@@ -115,7 +121,7 @@ const PatientHistory = () => {
                   {patientHistory.map((record, index) => (
                     <tr key={index}>
                       <td>{record.date}</td>
-                      <td>{record.scanType}</td>
+                      <td>{record.scan_type}</td> 
                       <td>{record.diagnosis}</td>
                     </tr>
                   ))}

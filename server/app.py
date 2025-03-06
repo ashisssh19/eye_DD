@@ -110,14 +110,18 @@ def predict():
             }
             swapped_label = label_mapping.get(predicted_label, predicted_label)
 
-            # Store in MongoDB
             history_collection.update_one(
                 {"patient_id": patient_id},
-                {"$push": {"history": {
-                    "date": datetime.utcnow(),
-                    "scan_type": "Eye Scan",
-                    "diagnosis": swapped_label
-                }}},
+                {
+                    "$setOnInsert": {"patient_id": patient_id},  # Ensure the document exists
+                    "$push": {
+                        "history": {
+                            "date": datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT'),
+                            "scan_type": "FP Scan",
+                            "diagnosis": swapped_label
+                        }
+                    }
+                },
                 upsert=True
             )
 
