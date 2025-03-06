@@ -6,15 +6,22 @@ import "./UploadScan.css";
 const UploadScan = () => {
   const navigate = useNavigate();
   const [selectedFiles, setSelectedFiles] = useState([]);
+  const [octFiles, setOctFiles] = useState([]);
   const [predictions, setPredictions] = useState([]);
   const [patientId, setPatientId] = useState("");
   const [patientIdError, setPatientIdError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showOctUpload, setShowOctUpload] = useState(false);
+  const [fpResult, setFpResult] = useState(null);
 
-  const handleFileChange = (event) => {
+  const handleFileChange = (event, isOct) => {
     const files = Array.from(event.target.files);
-    setSelectedFiles((prevFiles) => [...prevFiles, ...files]);
+    if (isOct) {
+      setOctFiles(files);
+    } else {
+      setSelectedFiles(files);
+    }
   };
 
   const handlePatientIdChange = (event) => {
@@ -37,45 +44,76 @@ const UploadScan = () => {
   const handleUpload = async () => {
     setError("");
     setPredictions([]);
-  
+
     if (patientId.trim() === "") {
       setPatientIdError("Patient ID is required");
       return;
     }
-  
+
     if (selectedFiles.length === 0) {
-      setError("Please select at least one image.");
+      setError("Please select at least one FP scan.");
       return;
     }
-  
+
     setIsLoading(true);
-  
     try {
       const formData = new FormData();
       formData.append("patient_id", patientId);
       selectedFiles.forEach((file) => formData.append("files", file));
-  
+
       const response = await axios.post("http://localhost:5000/predict", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
 
-      console.log("API Response:", response.data); // 🔍 Debugging
-
       if (Array.isArray(response.data)) {
         setPredictions(response.data);
+        const fpDiagnosis = response.data[0].disease;
+        setFpResult(fpDiagnosis);
+
+        if (fpDiagnosis === "Diabetic Retinopathy" || fpDiagnosis === "Normal") {
+          setShowOctUpload(true);
+        }
       } else {
         setError("Unexpected response format from the server.");
       }
     } catch (error) {
-      setError(error.response?.data?.error || "Failed to process images.");
+      setError(error.response?.data?.error || "Failed to process FP scan.");
     } finally {
       setIsLoading(false);
     }
-};
+  };
 
+  const handleOctUpload = async () => {
+    setError("");
+    if (octFiles.length === 0) {
+      setError("Please select at least one OCT scan.");
+      return;
+    }
 
-  const removeFile = (index) => {
-    setSelectedFiles(selectedFiles.filter((_, i) => i !== index));
+    setIsLoading(true);
+    try {
+      const formData = new FormData();
+      octFiles.forEach((file) => formData.append("files", file));
+
+      const response = await axios.post("http://192.168.0.165:5001/predict-oct", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+
+      console.log("OCT API Response:", response.data);
+      setPredictions(response.data);
+    } catch (error) {
+      setError(error.response?.data?.error || "Failed to process OCT scan.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const removeFile = (index, isOct) => {
+    if (isOct) {
+      setOctFiles(octFiles.filter((_, i) => i !== index));
+    } else {
+      setSelectedFiles(selectedFiles.filter((_, i) => i !== index));
+    }
   };
 
   return (
@@ -93,10 +131,9 @@ const UploadScan = () => {
 
       <div className="body-container">
         <div className="background-photo"></div>
-
         <div className="about-us-box">
           <h2>Upload Eye Scans</h2>
-          <p>Upload multiple eye scans for AI analysis.</p>
+          <p>Upload eye scans for AI analysis.</p>
 
           <div className="patient-id-container">
             <label htmlFor="patientId">Patient ID*:</label>
@@ -111,45 +148,47 @@ const UploadScan = () => {
           </div>
 
           <label className="file-input-label">
-            Select Files
-            <input 
-              type="file" 
-              multiple 
-              accept="image/jpeg,image/png,image/jpg" 
-              onChange={handleFileChange} 
-            />
+            Select FP Scan
+            <input type="file" accept="image/jpeg,image/png,image/jpg" multiple onChange={(e) => handleFileChange(e, false)} />
           </label>
+          <div className="image-grid">
+            {selectedFiles.map((file, index) => (
+              <div key={index} className="image-container">
+                <img src={URL.createObjectURL(file)} alt="Preview" className="small-preview" />
+                <button onClick={() => removeFile(index, false)}>✕</button>
+              </div>
+            ))}
+          </div>
 
-          {selectedFiles.length > 0 && (
-            <div className="image-grid">
-              {selectedFiles.map((file, index) => (
-                <div key={index} className="image-container">
-                  <img 
-                    src={URL.createObjectURL(file)} 
-                    alt={`Upload ${index + 1}`} 
-                  />
-                  <button onClick={() => removeFile(index)}>✕</button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {error && <div className="error-box">{error}</div>}
-
-          <button 
-            onClick={handleUpload} 
-            disabled={isLoading} 
-            className="upload-btn"
-          >
-            {isLoading ? "Processing..." : "Analyze Scans"}
+          <button onClick={handleUpload} disabled={isLoading} className="upload-btn">
+            {isLoading ? "Processing..." : "Analyze FP Scan"}
           </button>
 
-          {isLoading && <p>Analyzing your scans, please wait...</p>}
+          {showOctUpload && (
+            <>
+              <label className="file-input-label">
+                Select OCT Scan
+                <input type="file" accept="image/jpeg,image/png,image/jpg" multiple onChange={(e) => handleFileChange(e, true)} />
+              </label>
+              <div className="image-grid">
+                {octFiles.map((file, index) => (
+                  <div key={index} className="image-container">
+                    <img src={URL.createObjectURL(file)} alt="Preview" className="small-preview" />
+                    <button onClick={() => removeFile(index, true)}>✕</button>
+                  </div>
+                ))}
+              </div>
+              <button onClick={handleOctUpload} disabled={isLoading} className="upload-btn">
+                {isLoading ? "Processing..." : "Analyze OCT Scan"}
+              </button>
+            </>
+          )}
 
           {predictions.length > 0 && predictions.map((pred, index) => (
             <div key={index}>
               <p><strong>File:</strong> {pred.filename}</p>
               <p><strong>Disease:</strong> {pred.disease}</p>
+              {pred.message && <p><strong>Diagnosis:</strong> {pred.message}</p>}
             </div>
           ))}
         </div>
