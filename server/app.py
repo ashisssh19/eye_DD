@@ -3,7 +3,9 @@ import numpy as np
 import tensorflow as tf
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from pymongo import MongoClient
 from PIL import Image
+from datetime import datetime
 from tensorflow.keras.preprocessing.image import img_to_array
 from tensorflow.keras.applications.vgg16 import preprocess_input
 import logging
@@ -12,12 +14,18 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# Initialize Flask app
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins="http://localhost:5173", supports_credentials=True)
+
+# Connect to MongoDB
+client = MongoClient("mongodb://localhost:27017/")
+db = client.eye_scan_db  # Database name
+history_collection = db.patient_history  # Collection name
 
 # Model and configuration
 MODEL_PATH = "model.h5"
-CLASS_LABELS = ["Normal", "Glaucoma", "Diabetic Retinopathy", "Cataract"]
+CLASS_LABELS = ["Cataract", "Glaucoma", "Diabetic Retinopathy", "Normal"]
 INPUT_SHAPE = (224, 224)
 
 # Load the model once to avoid reloading on every request
@@ -28,6 +36,7 @@ except Exception as e:
     logger.error(f"❌ Error loading model: {e}")
     model = None
 
+
 def preprocess_image(image):
     """
     Convert the uploaded image into a format compatible with VGG16.
@@ -37,12 +46,11 @@ def preprocess_image(image):
         img_array = img_to_array(img_resized)
         img_array = np.expand_dims(img_array, axis=0)  # Add batch dimension
         img_array = preprocess_input(img_array)  # Apply VGG16 preprocessing
-
-        logger.info(f"✅ Processed image shape: {img_array.shape}")
         return img_array
     except Exception as e:
         logger.error(f"❌ Image preprocessing error: {e}")
         raise
+
 
 def validate_image_file(file):
     """
@@ -58,6 +66,7 @@ def validate_image_file(file):
     if file_ext not in allowed_extensions:
         raise ValueError(f"Unsupported file type. Allowed types: {', '.join(allowed_extensions)}")
 
+
 @app.route("/predict", methods=["POST"])
 def predict():
     """
@@ -70,12 +79,10 @@ def predict():
     logger.info(f"📌 Prediction request for Patient ID: {patient_id}")
 
     if "files" not in request.files:
-        logger.warning("❌ No files uploaded")
         return jsonify({"error": "No files uploaded"}), 400
 
     files = request.files.getlist("files")
     if not files:
-        logger.warning("❌ Empty file list")
         return jsonify({"error": "No files uploaded"}), 400
 
     predictions = []
@@ -90,24 +97,29 @@ def predict():
             prediction = model.predict(processed_img)
             probabilities = prediction[0]
 
-            logger.info(f"📊 Raw Predictions: {probabilities}")
-
             # Get the original prediction
             predicted_idx = np.argmax(probabilities)
             predicted_label = CLASS_LABELS[predicted_idx]
-
-            logger.info(f"🔹 Original Prediction: {predicted_label}")
 
             # Swapping logic for labels
             label_mapping = {
                 "Glaucoma": "Diabetic Retinopathy",
                 "Diabetic Retinopathy": "Glaucoma",
-                "Cataract": "Normal",
-                "Normal": "Cataract"
+                "Cataract": "Cataract",
+                "Normal": "Normal"
             }
             swapped_label = label_mapping.get(predicted_label, predicted_label)
 
-            logger.info(f"🔄 Swapped Prediction: {swapped_label}")
+            # Store in MongoDB
+            history_collection.update_one(
+                {"patient_id": patient_id},
+                {"$push": {"history": {
+                    "date": datetime.utcnow(),
+                    "scan_type": "Eye Scan",
+                    "diagnosis": swapped_label
+                }}},
+                upsert=True
+            )
 
             predictions.append({
                 "filename": file.filename,
@@ -124,12 +136,27 @@ def predict():
 
     return jsonify(predictions)
 
+
+@app.route("/patient-history/<patient_id>", methods=["GET"])
+def get_patient_history(patient_id):
+    """
+    Retrieve past scan records for a patient.
+    """
+    patient_record = history_collection.find_one({"patient_id": patient_id}, {"_id": 0})
+
+    if not patient_record:
+        return jsonify({"error": "No history found"}), 404
+
+    return jsonify({"history": patient_record.get("history", [])})
+
+
 def main():
     """
     Start Flask API
     """
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
 if __name__ == "__main__":
     main()

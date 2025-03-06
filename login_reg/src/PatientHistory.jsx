@@ -30,11 +30,9 @@ const PatientHistory = () => {
   };
 
   const fetchPatientHistory = async () => {
-    // Reset states
     setError("");
     setPatientHistory([]);
     
-    // Validate patient ID
     if (patientId.trim() === "") {
       setError("Patient ID is required");
       return;
@@ -44,7 +42,9 @@ const PatientHistory = () => {
     setSearchPerformed(true);
 
     try {
-      const response = await axios.get(`http://localhost:5000/patient-history/${patientId}`);
+      const response = await axios.get(`http://localhost:5000/patient-history/${patientId}`, {
+        withCredentials: true,
+      });
       
       if (response.data && response.data.history) {
         setPatientHistory(response.data.history);
@@ -61,7 +61,6 @@ const PatientHistory = () => {
 
   return (
     <div className="home-container">
-      {/* Header/Navbar */}
       <div className="header">
         <div className="logo">
           <img src="logo.png" alt="Easy Optha Logo" />
@@ -73,13 +72,9 @@ const PatientHistory = () => {
         </div>
       </div>
 
-      {/* Body Section */}
       <div className="body-container">
-        <div className="background-photo">
-          {/* Background image here */}
-        </div>
+        <div className="background-photo"></div>
 
-        {/* Patient History Section */}
         <div className="about-us-box history-box">
           <h2>Patient History</h2>
           <p>Enter a patient ID to view their scan history and analysis results.</p>
@@ -101,17 +96,8 @@ const PatientHistory = () => {
             </button>
           </div>
 
-          {error && (
-            <div className="error-message">
-              {error}
-            </div>
-          )}
-
-          {isLoading && (
-            <div className="loading-indicator">
-              <p>Fetching patient history...</p>
-            </div>
-          )}
+          {error && <div className="error-message">{error}</div>}
+          {isLoading && <div className="loading-indicator"><p>Fetching patient history...</p></div>}
 
           {patientHistory.length > 0 ? (
             <div className="history-results">
@@ -123,7 +109,6 @@ const PatientHistory = () => {
                     <th>Date</th>
                     <th>Scan Type</th>
                     <th>Diagnosis</th>
-                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -132,9 +117,6 @@ const PatientHistory = () => {
                       <td>{record.date}</td>
                       <td>{record.scanType}</td>
                       <td>{record.diagnosis}</td>
-                      <td>
-                        <button className="view-button">View Details</button>
-                      </td>
                     </tr>
                   ))}
                 </tbody>
